@@ -1,0 +1,96 @@
+name: 🤖 Merge Godot Source Repos
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Branch to merge into (keep separate from main!)'
+        required: true
+        default: 'dev/merged-base'
+
+jobs:
+  merge-repos:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 📥 Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: 📦 Clone source repositories
+        run: |
+          mkdir -p temp_repos
+          cd temp_repos
+          git clone --depth 1 https://github.com/frokk/IsometricExample3D.git
+          git clone --depth 1 https://github.com/renanstn/godot-lab.git
+          git clone --depth 1 https://github.com/Ceisriel/Godot-Action-Combat.git
+          git clone --depth 1 https://github.com/glennDittmann/godot-pixel-art-template.git
+
+      - name: 🗂️ Extract & structure files
+        run: |
+          # Base structure
+          mkdir -p scenes/player weapons scripts/dash rendering/world
+
+          # 1. Isometric player controller
+          cp -r temp_repos/IsometricExample3D/player/Player.tscn scenes/player/ 2>/dev/null || true
+          cp -r temp_repos/IsometricExample3D/player/Player.gd scenes/player/ 2>/dev/null || true
+
+          # 2. Boomerang/Sword logic
+          cp "temp_repos/godot-lab/Mechanics Lab/Scripts/Boomerang.gd" weapons/Boomerang.gd 2>/dev/null || true
+
+          # 3. Dash system
+          cp -r temp_repos/Godot-Action-Combat/scripts/Player/DashController.gd scripts/dash/ 2>/dev/null || true
+
+          # 4. Pixel-art viewport config
+          mkdir -p config
+          cp temp_repos/godot-pixel-art-template/project_settings.tres config/pixel_settings.tres 2>/dev/null || true
+
+      - name: 🔧 Apply Godot 4 Baseline Fixes
+        run: |
+          # Godot 4 move_and_slide() takes NO arguments
+          find . -name "*.gd" -type f -exec sed -i -E 's/move_and_slide\([^)]*\)/move_and_slide()/g' {} +
+
+          # Fix common 3D node swaps (only in weapon & dash scripts to avoid breaking isometric 2D/3D hybrids)
+          sed -i 's/Area2D/Area3D/g' weapons/Boomerang.gd
+          sed -i 's/Vector2/Vector3/g' weapons/Boomerang.gd
+          sed -i 's/global_position/global_position/g' weapons/Boomerang.gd
+
+          # Ensure Godot 4 input syntax compatibility
+          find . -name "*.gd" -type f -exec sed -i -E 's/Input\.is_action_pressed\(([^)]+)\)/Input.is_action_pressed(\1)/g' {} +
+
+      - name: 📝 Generate README merge log
+        run: |
+          cat > MERGE_LOG.md << EOF
+          # 🔀 Auto-Merged Godot Repos
+          **Generated**: $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Target**: \`${{ github.event.inputs.target_branch }}\`
+
+          ## 📦 Sources
+          - \`IsometricExample3D\` → Player controller & camera
+          - \`godot-lab\` → Boomerang/Sword return logic
+          - \`Godot-Action-Combat\` → Dash system
+          - \`godot-pixel-art-template\` → Viewport settings
+
+          ## ⚠️ Next Steps (Manual)
+          1. Open in Godot 4.2+
+          2. Fix broken node paths in \`.tscn\` files
+          3. Create \`project.godot\` if missing
+          4. Add InputMap actions: \`move_up/down/left/right, attack, dash, interact\`
+          5. Re-import assets (Godot generates \`.import\` folder automatically)
+          EOF
+
+      - name: 🚀 Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "✅ No changes to commit."
+          else
+            git commit -m "🤖 Auto-merge: Combined repos + Godot 4 baseline fixes"
+            git push origin ${{ github.event.inputs.target_branch }}
+            echo "✅ Pushed to ${{ github.event.inputs.target_branch }}"
+          fi
